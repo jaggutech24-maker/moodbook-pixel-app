@@ -1,12 +1,57 @@
+import { useEffect } from 'react';
 import { useMoodBookStore } from './store/useMoodBookStore';
 import { HomeScreen } from './features/HomeScreen';
 import { MoodSelector } from './features/MoodSelector';
 import { DrawPanel } from './features/DrawPanel';
 import { GuessPanel } from './features/GuessPanel';
 import { ResultScreen } from './features/ResultScreen';
+import { roomSync } from './lib/roomSync';
 
 export default function App() {
   const { phase, roomCode } = useMoodBookStore();
+
+  useEffect(() => {
+    const unsub = roomSync.subscribe((event) => {
+      const store = useMoodBookStore.getState();
+      
+      switch (event.type) {
+        case 'PING':
+          if (store.phase === 'lobby') {
+            store.setPartnerName(event.playerName);
+            store.setPhase(store.isDrawer ? 'mood' : 'guess');
+            roomSync.emit({ type: 'PARTNER_JOINED', playerName: store.playerName });
+          }
+          break;
+        case 'PARTNER_JOINED':
+          if (store.phase === 'lobby') {
+            store.setPartnerName(event.playerName);
+            store.setPhase(store.isDrawer ? 'mood' : 'guess');
+          }
+          break;
+        case 'MOOD_SELECTED':
+          store.setPartnerMood(event.mood);
+          break;
+        case 'DRAWING_SUBMITTED':
+          store.setPartnerDrawingDataUrl(event.dataUrl);
+          store.setPartnerStrokes(event.strokes);
+          break;
+        case 'GUESS_SUBMITTED':
+          store.setPartnerGuess(event.guess);
+          if (store.phase === 'waiting') {
+            store.setPhase('result');
+          }
+          break;
+        case 'PHASE_CHANGED':
+          store.setPhase(event.phase as any);
+          break;
+        case 'ROUND_RESET':
+          store.resetRound();
+          break;
+      }
+    });
+
+    return () => unsub();
+  }, []);
 
   const renderPhase = () => {
     switch (phase) {
