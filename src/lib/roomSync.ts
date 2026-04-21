@@ -45,8 +45,7 @@ class RoomSyncManager {
   private playerId: string = '';
   private listeners: SyncListener[] = [];
   private eventsRef: ReturnType<typeof ref> | null = null;
-  // Track the push key of the most recent event we wrote so we can ignore our own
-  private sentKeys = new Set<string>();
+  private playersRef: ReturnType<typeof ref> | null = null;
 
   /** Join (or create) a room */
   async joinRoom(
@@ -60,53 +59,50 @@ class RoomSyncManager {
     this.roomCode = roomCode;
     this.playerId = playerId;
 
-    // Write player presence
+    // 1. Set Player Presence
     const playerRef = ref(db, `rooms/${roomCode}/players/${playerId}`);
     await set(playerRef, {
       name: playerName,
       isDrawer: isCreator,
+      id: playerId,
       joinedAt: serverTimestamp(),
     });
-    // Remove presence on disconnect
     onDisconnect(playerRef).remove();
 
-    // Start listening to events BEFORE we write the PING
-    // so we don't miss the host's PARTNER_JOINED reply
+    // 2. Listen to Events
     const eventsRef = ref(db, `rooms/${roomCode}/events`);
     this.eventsRef = eventsRef;
-
-    // We mark the "cursor" time to ignore events that were already there
-    // before we joined (avoids replaying old rounds).
-    const joinTime = Date.now();
-
     onChildAdded(eventsRef, (snapshot) => {
-      const data = snapshot.val() as SyncEvent & {
-        _senderId?: string;
-        timestamp?: number;
-      };
-      if (!data) return;
-      // Ignore our own emits
-      if (data._senderId === this.playerId) return;
-
-      const { _senderId, timestamp, ...event } = data as any;
-      this.listeners.forEach((fn) => fn(event as SyncEvent));
+      const data = snapshot.val();
+      if (!data || data._senderId === this.playerId) return;
+      this.listeners.forEach((fn) => fn(data as SyncEvent));
     });
 
-    // Joiner announces themselves via PING so host knows to reply
-    if (!isCreator) {
-      await this._pushEvent({ type: 'PING', playerName, playerId });
+    // 3. (NEW) Host watches for partner directly
+    if (isCreator) {
+      const playersRef = ref(db, `rooms/${roomCode}/players`);
+      this.playersRef = playersRef;
+      onValue(playersRef, (snapshot) => {
+        const players = snapshot.val();
+        if (!players) return;
+        const playerIds = Object.keys(players);
+        if (playerIds.length >= 2) {
+          const partnerId = playerIds.find(id => id !== this.playerId);
+          const partnerName = players[partnerId!].name;
+          // Notify Host's local listeners (the App.tsx subscriber)
+          this.listeners.forEach(fn => fn({ type: 'PARTNER_JOINED', playerName: partnerName }));
+        }
+      });
+    } else {
+      // Joiner still pings just in case host is already in lobby
+      this.emit({ type: 'PING', playerName, playerId });
     }
   }
 
   /** Emit an event to the room (all connected players will receive it) */
   async emit(event: SyncEvent): Promise<void> {
-    await this._pushEvent(event);
-  }
-
-  private async _pushEvent(event: SyncEvent): Promise<void> {
     if (!this.eventsRef) return;
-    const newRef = push(this.eventsRef);
-    await set(newRef, {
+    await push(this.eventsRef, {
       ...event,
       _senderId: this.playerId,
       timestamp: Date.now(),
@@ -123,14 +119,13 @@ class RoomSyncManager {
 
   /** Clean up — call when leaving the room or going back to home */
   leave() {
-    if (this.eventsRef) {
-      off(this.eventsRef); // detach all Firebase listeners
-      this.eventsRef = null;
-    }
+    if (this.eventsRef) off(this.eventsRef);
+    if (this.playersRef) off(this.playersRef);
+    this.eventsRef = null;
+    this.playersRef = null;
     this.listeners = [];
     this.roomCode = '';
     this.playerId = '';
-    this.sentKeys.clear();
   }
 
   getRoomCode() {
