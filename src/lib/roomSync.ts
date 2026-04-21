@@ -1,14 +1,28 @@
 /**
- * MoodBook — Room Sync (PeerJS / WebRTC)
- * Cross-device real-time sync using PeerJS (WebRTC peer-to-peer).
+ * MoodBook — Room Sync (Firebase Realtime Database)
  *
- * Protocol:
- *  - Creator: registers as a PeerJS peer with ID = "moodbook-<ROOMCODE>"
- *  - Joiner:  connects to peer ID "moodbook-<ROOMCODE>" and sends events
- *  - Both sides relay events to all connected peers + local listeners
+ * How it works:
+ *  - Creator joins a room → writes their presence to /rooms/{code}/players/{id}
+ *  - Joiner joins a room  → writes their presence + fires PING event
+ *  - Both sides listen to /rooms/{code}/events and react to new children
+ *  - Events are append-only using Firebase push() so ordering is guaranteed
+ *
+ * Database structure:
+ *   /rooms/{roomCode}/
+ *     players/{playerId}: { name, isDrawer, joinedAt }
+ *     events/{pushId}:    { type, ...payload, _senderId, timestamp }
  */
 
-import Peer, { DataConnection } from 'peerjs';
+import { db } from './firebase';
+import {
+  ref,
+  push,
+  onChildAdded,
+  set,
+  off,
+  serverTimestamp,
+  onDisconnect,
+} from 'firebase/database';
 import { Stroke, MoodOption } from '../store/useMoodBookStore';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -27,114 +41,79 @@ type SyncListener = (event: SyncEvent) => void;
 // ─── Manager ──────────────────────────────────────────────────────────────────
 
 class RoomSyncManager {
-  private peer: Peer | null = null;
-  private connections: DataConnection[] = [];
-  private listeners: SyncListener[] = [];
   private roomCode: string = '';
   private playerId: string = '';
+  private listeners: SyncListener[] = [];
+  private eventsRef: ReturnType<typeof ref> | null = null;
+  // Track the push key of the most recent event we wrote so we can ignore our own
+  private sentKeys = new Set<string>();
 
-  /** Create or join a room */
+  /** Join (or create) a room */
   async joinRoom(
     roomCode: string,
     playerId: string,
     playerName: string,
     isCreator: boolean
   ): Promise<void> {
-    // Tear down any existing peer
-    this.leave();
+    this.leave(); // tear down any previous session
 
     this.roomCode = roomCode;
     this.playerId = playerId;
 
-    const peerId = `moodbook-${roomCode}`;
+    // Write player presence
+    const playerRef = ref(db, `rooms/${roomCode}/players/${playerId}`);
+    await set(playerRef, {
+      name: playerName,
+      isDrawer: isCreator,
+      joinedAt: serverTimestamp(),
+    });
+    // Remove presence on disconnect
+    onDisconnect(playerRef).remove();
 
-    if (isCreator) {
-      // ── HOST: register with the room's peer ID ──────────────────────────────
-      this.peer = new Peer(peerId);
+    // Start listening to events BEFORE we write the PING
+    // so we don't miss the host's PARTNER_JOINED reply
+    const eventsRef = ref(db, `rooms/${roomCode}/events`);
+    this.eventsRef = eventsRef;
 
-      await new Promise<void>((resolve, reject) => {
-        this.peer!.on('open', () => {
-          console.log('[RoomSync] Host peer open:', peerId);
-          resolve();
-        });
-        this.peer!.on('error', (err) => {
-          // If room already taken we still try to recover; surface error
-          console.error('[RoomSync] Host peer error:', err);
-          reject(err);
-        });
-      });
+    // We mark the "cursor" time to ignore events that were already there
+    // before we joined (avoids replaying old rounds).
+    const joinTime = Date.now();
 
-      // Accept incoming connections from joiners
-      this.peer.on('connection', (conn) => {
-        this._setupConnection(conn);
-      });
-    } else {
-      // ── JOINER: connect to the host ─────────────────────────────────────────
-      this.peer = new Peer(); // random peer ID for joiner
+    onChildAdded(eventsRef, (snapshot) => {
+      const data = snapshot.val() as SyncEvent & {
+        _senderId?: string;
+        timestamp?: number;
+        _key?: string;
+      };
+      if (!data) return;
+      // Ignore our own emits
+      if (data._senderId === this.playerId) return;
+      // Ignore events from before we joined this session
+      if (data.timestamp && data.timestamp < joinTime - 5000) return;
 
-      await new Promise<void>((resolve, reject) => {
-        this.peer!.on('open', () => {
-          console.log('[RoomSync] Joiner peer open, connecting to host:', peerId);
-          const conn = this.peer!.connect(peerId, { reliable: true });
+      const { _senderId, timestamp, ...event } = data as any;
+      this.listeners.forEach((fn) => fn(event as SyncEvent));
+    });
 
-          conn.on('open', () => {
-            this._setupConnection(conn);
-            // Announce arrival
-            this._send(conn, { type: 'PING', playerName, playerId });
-            resolve();
-          });
-
-          conn.on('error', (err) => {
-            console.error('[RoomSync] Connection error:', err);
-            reject(err);
-          });
-        });
-        this.peer!.on('error', (err) => {
-          console.error('[RoomSync] Joiner peer error:', err);
-          reject(err);
-        });
-      });
+    // Joiner announces themselves via PING so host knows to reply
+    if (!isCreator) {
+      await this._pushEvent({ type: 'PING', playerName, playerId });
     }
   }
 
-  /** Wire up a DataConnection */
-  private _setupConnection(conn: DataConnection) {
-    this.connections.push(conn);
-
-    conn.on('data', (raw) => {
-      const event = raw as SyncEvent & { _senderId?: string };
-      if ((event as any)._senderId === this.playerId) return; // echo guard
-      // Relay to all OTHER connections (for >2 player support in the future)
-      this.connections
-        .filter((c) => c !== conn && c.open)
-        .forEach((c) => this._send(c, event));
-      // Dispatch to local listeners
-      this.listeners.forEach((fn) => fn(event));
-    });
-
-    conn.on('close', () => {
-      this.connections = this.connections.filter((c) => c !== conn);
-      console.log('[RoomSync] Connection closed');
-    });
-
-    conn.on('error', (err) => {
-      console.error('[RoomSync] DataConnection error:', err);
-      this.connections = this.connections.filter((c) => c !== conn);
-    });
+  /** Emit an event to the room (all connected players will receive it) */
+  async emit(event: SyncEvent): Promise<void> {
+    await this._pushEvent(event);
   }
 
-  /** Send a single event on a specific connection */
-  private _send(conn: DataConnection, event: SyncEvent) {
-    if (conn.open) {
-      conn.send({ ...event, _senderId: this.playerId });
-    }
-  }
-
-  /** Emit an event to ALL connected peers */
-  emit(event: SyncEvent) {
-    this.connections
-      .filter((c) => c.open)
-      .forEach((c) => this._send(c, event));
+  private async _pushEvent(event: SyncEvent): Promise<void> {
+    if (!this.eventsRef) return;
+    const newRef = push(this.eventsRef);
+    await set(newRef, {
+      ...event,
+      _senderId: this.playerId,
+      timestamp: Date.now(),
+    });
   }
 
   /** Subscribe to incoming room events */
@@ -145,16 +124,16 @@ class RoomSyncManager {
     };
   }
 
-  /** Clean up everything */
+  /** Clean up — call when leaving the room or going back to home */
   leave() {
-    this.connections.forEach((c) => { try { c.close(); } catch (_) {} });
-    this.connections = [];
-    if (this.peer) {
-      try { this.peer.destroy(); } catch (_) {}
-      this.peer = null;
+    if (this.eventsRef) {
+      off(this.eventsRef); // detach all Firebase listeners
+      this.eventsRef = null;
     }
     this.listeners = [];
     this.roomCode = '';
+    this.playerId = '';
+    this.sentKeys.clear();
   }
 
   getRoomCode() {
