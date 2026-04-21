@@ -10,14 +10,18 @@ import { roomSync, generateRoomCode } from '../lib/roomSync';
 import { sounds } from '../lib/sounds';
 import { PixelButton } from '../components/PixelButton';
 
+type ConnectState = 'idle' | 'connecting' | 'error';
+
 export const HomeScreen: React.FC = () => {
   const { playerName, setPlayerName, setRoomCode, setPhase, playerId, setIsDrawer } = useMoodBookStore();
   const [mode, setMode] = useState<'none' | 'create' | 'join'>('none');
   const [joinCode, setJoinCode] = useState('');
   const [nameInput, setNameInput] = useState(playerName || '');
   const [error, setError] = useState('');
+  const [connectState, setConnectState] = useState<ConnectState>('idle');
+  const [connectError, setConnectError] = useState('');
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!nameInput.trim()) { setError('Enter your name first!'); return; }
     sounds.click();
     sounds.startBGM();
@@ -25,11 +29,21 @@ export const HomeScreen: React.FC = () => {
     setPlayerName(nameInput.trim());
     setRoomCode(code);
     setIsDrawer(true);
-    roomSync.joinRoom(code, playerId, nameInput.trim());
-    setPhase('lobby');
+    setConnectState('connecting');
+    setConnectError('');
+
+    try {
+      await roomSync.joinRoom(code, playerId, nameInput.trim(), true);
+      setConnectState('idle');
+      setPhase('lobby');
+    } catch (err: any) {
+      setConnectState('error');
+      setConnectError('Could not create room. Try again.');
+      console.error(err);
+    }
   };
 
-  const handleJoin = () => {
+  const handleJoin = async () => {
     if (!nameInput.trim()) { setError('Enter your name first!'); return; }
     if (joinCode.length < 4) { setError('Enter a valid room code!'); return; }
     sounds.click();
@@ -37,8 +51,18 @@ export const HomeScreen: React.FC = () => {
     setPlayerName(nameInput.trim());
     setRoomCode(joinCode.toUpperCase());
     setIsDrawer(false);
-    roomSync.joinRoom(joinCode.toUpperCase(), playerId, nameInput.trim());
-    setPhase('lobby');
+    setConnectState('connecting');
+    setConnectError('');
+
+    try {
+      await roomSync.joinRoom(joinCode.toUpperCase(), playerId, nameInput.trim(), false);
+      setConnectState('idle');
+      setPhase('lobby');
+    } catch (err: any) {
+      setConnectState('error');
+      setConnectError('Could not find that room. Check the code and try again!');
+      console.error(err);
+    }
   };
 
   const handleSoloPlay = () => {
@@ -50,6 +74,8 @@ export const HomeScreen: React.FC = () => {
     setIsDrawer(true);
     setPhase('mood');
   };
+
+  const isConnecting = connectState === 'connecting';
 
   return (
     <div
@@ -100,6 +126,7 @@ export const HomeScreen: React.FC = () => {
             onChange={(e) => { setNameInput(e.target.value); setError(''); }}
             onKeyDown={(e) => e.key === 'Enter' && setMode('none')}
             maxLength={16}
+            disabled={isConnecting}
           />
           {error && (
             <p style={{ fontSize: '10px', color: '#E8A0A0', marginTop: '6px', fontFamily: "'Pixelify Sans', monospace" }}>
@@ -116,13 +143,42 @@ export const HomeScreen: React.FC = () => {
         transition={{ delay: 0.25 }}
         style={{ width: '100%', maxWidth: '280px', display: 'flex', flexDirection: 'column', gap: '10px' }}
       >
-        {mode === 'none' && (
+        {/* Connecting spinner */}
+        {isConnecting && (
+          <div style={{
+            textAlign: 'center',
+            fontFamily: "'Pixelify Sans', monospace",
+            fontSize: '13px',
+            color: '#8B6348',
+            padding: '8px',
+            animation: 'pulse 1s ease-in-out infinite',
+          }}>
+            🔄 Connecting... please wait
+          </div>
+        )}
+
+        {/* Connection error */}
+        {connectState === 'error' && (
+          <div style={{
+            textAlign: 'center',
+            fontFamily: "'Pixelify Sans', monospace",
+            fontSize: '11px',
+            color: '#E8A0A0',
+            padding: '8px',
+            border: '2px solid #E8A0A0',
+            backgroundColor: '#FFF0F0',
+          }}>
+            ❌ {connectError}
+          </div>
+        )}
+
+        {!isConnecting && mode === 'none' && (
           <>
             <PixelButton
               variant="default"
               size="md"
               style={{ width: '100%', justifyContent: 'center' }}
-              onClick={() => { sounds.click(); setMode('create'); }}
+              onClick={() => { sounds.click(); setMode('create'); setConnectState('idle'); }}
             >
               🏠 Create Room
             </PixelButton>
@@ -130,7 +186,7 @@ export const HomeScreen: React.FC = () => {
               variant="blue"
               size="md"
               style={{ width: '100%', justifyContent: 'center' }}
-              onClick={() => { sounds.click(); setMode('join'); }}
+              onClick={() => { sounds.click(); setMode('join'); setConnectState('idle'); }}
             >
               🔗 Join Room
             </PixelButton>
@@ -145,7 +201,7 @@ export const HomeScreen: React.FC = () => {
           </>
         )}
 
-        {mode === 'create' && (
+        {!isConnecting && mode === 'create' && (
           <div className="flex flex-col gap-3">
             <p style={{
               fontFamily: "'Pixelify Sans', monospace",
@@ -167,20 +223,20 @@ export const HomeScreen: React.FC = () => {
               variant="blue"
               size="sm"
               style={{ width: '100%', justifyContent: 'center' }}
-              onClick={() => setMode('none')}
+              onClick={() => { setMode('none'); setConnectState('idle'); }}
             >
               ← Back
             </PixelButton>
           </div>
         )}
 
-        {mode === 'join' && (
+        {!isConnecting && mode === 'join' && (
           <div className="flex flex-col gap-3">
             <input
               className="pixel-input"
               placeholder="Enter room code..."
               value={joinCode}
-              onChange={(e) => { setJoinCode(e.target.value.toUpperCase()); setError(''); }}
+              onChange={(e) => { setJoinCode(e.target.value.toUpperCase()); setError(''); setConnectState('idle'); }}
               maxLength={8}
               style={{ textAlign: 'center', fontSize: '14px', letterSpacing: '3px', fontWeight: 700 }}
             />
@@ -196,7 +252,7 @@ export const HomeScreen: React.FC = () => {
               variant="default"
               size="sm"
               style={{ width: '100%', justifyContent: 'center' }}
-              onClick={() => setMode('none')}
+              onClick={() => { setMode('none'); setConnectState('idle'); }}
             >
               ← Back
             </PixelButton>

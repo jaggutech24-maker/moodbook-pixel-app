@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useMoodBookStore } from './store/useMoodBookStore';
 import { HomeScreen } from './features/HomeScreen';
 import { MoodSelector } from './features/MoodSelector';
@@ -9,20 +9,32 @@ import { roomSync } from './lib/roomSync';
 
 export default function App() {
   const { phase, roomCode } = useMoodBookStore();
+  const [copied, setCopied] = useState(false);
+
+  const copyCode = () => {
+    navigator.clipboard.writeText(roomCode).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   useEffect(() => {
     const unsub = roomSync.subscribe((event) => {
       const store = useMoodBookStore.getState();
-      
+
       switch (event.type) {
         case 'PING':
+          // Joiner just connected — host advances both sides
           if (store.phase === 'lobby') {
             store.setPartnerName(event.playerName);
-            store.setPhase(store.isDrawer ? 'mood' : 'guess');
+            // Tell joiner our name so they can advance too
             roomSync.emit({ type: 'PARTNER_JOINED', playerName: store.playerName });
+            // Host advances
+            store.setPhase(store.isDrawer ? 'mood' : 'guess');
           }
           break;
         case 'PARTNER_JOINED':
+          // Joiner receives this from host and advances
           if (store.phase === 'lobby') {
             store.setPartnerName(event.playerName);
             store.setPhase(store.isDrawer ? 'mood' : 'guess');
@@ -34,6 +46,10 @@ export default function App() {
         case 'DRAWING_SUBMITTED':
           store.setPartnerDrawingDataUrl(event.dataUrl);
           store.setPartnerStrokes(event.strokes);
+          // Advance guesser from their waiting state to guess
+          if (store.phase === 'guess' || store.phase === 'lobby') {
+            store.setPhase('guess');
+          }
           break;
         case 'GUESS_SUBMITTED':
           store.setPartnerGuess(event.guess);
@@ -59,29 +75,72 @@ export default function App() {
         return <HomeScreen />;
       case 'lobby':
         return (
-          <div className="flex flex-col items-center justify-center h-full text-center gap-4">
-            <h2 style={{ fontFamily: "'Press Start 2P', monospace", color: '#3A2E2A', fontSize: '18px' }}>
-              WAITING FOR PARTNER...
-            </h2>
-            <div className="bg-[#FDF4EE] border-4 border-[#3A2E2A] p-4 shadow-[4px_4px_0px_#3A2E2A]">
-              <p style={{ fontFamily: "'Pixelify Sans', monospace", color: '#8B6348', fontSize: '16px', fontWeight: 'bold' }}>
-                Room Code:
-              </p>
-              <h1 style={{ fontFamily: "'Press Start 2P', monospace", color: '#D8A7B1', fontSize: '32px', marginTop: '10px' }}>
-                {roomCode}
-              </h1>
+          <div className="flex flex-col items-center justify-center h-full text-center gap-4" style={{ padding: '20px' }}>
+            {/* Animated waiting dots */}
+            <div style={{ fontFamily: "'Press Start 2P', monospace", color: '#3A2E2A', fontSize: '14px' }}>
+              ⏳ WAITING FOR PARTNER
             </div>
-            <p style={{ fontFamily: "'Pixelify Sans', monospace", color: '#8B6348' }}>
-              Share this code so they can join!
+            <div style={{
+              width: '8px', height: '8px', borderRadius: '50%',
+              backgroundColor: '#D8A7B1',
+              animation: 'pulse 1.2s ease-in-out infinite',
+              margin: '-8px auto',
+            }} />
+
+            {/* Room code card */}
+            <div style={{
+              backgroundColor: '#FDF4EE',
+              border: '4px solid #3A2E2A',
+              padding: '20px 28px',
+              boxShadow: '4px 4px 0px #3A2E2A',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '10px',
+            }}>
+              <p style={{ fontFamily: "'Pixelify Sans', monospace", color: '#8B6348', fontSize: '14px', fontWeight: 'bold' }}>
+                📋 Room Code
+              </p>
+              <div style={{
+                fontFamily: "'Press Start 2P', monospace",
+                color: '#D8A7B1',
+                fontSize: '28px',
+                letterSpacing: '4px',
+                lineHeight: 1.2,
+              }}>
+                {roomCode}
+              </div>
+              <button
+                onClick={copyCode}
+                style={{
+                  fontFamily: "'Pixelify Sans', monospace",
+                  fontSize: '12px',
+                  padding: '6px 14px',
+                  border: '2px solid #3A2E2A',
+                  backgroundColor: copied ? '#A8D5BA' : '#F5D6A8',
+                  boxShadow: '2px 2px 0 #3A2E2A',
+                  cursor: 'pointer',
+                  color: '#3A2E2A',
+                  fontWeight: 700,
+                  transition: 'background-color 0.2s',
+                }}
+              >
+                {copied ? '✅ Copied!' : '📋 Copy Code'}
+              </button>
+            </div>
+
+            <p style={{ fontFamily: "'Pixelify Sans', monospace", color: '#8B6348', fontSize: '13px' }}>
+              Share this code with your partner on any device!
             </p>
-            <div className="flex gap-4 mt-4">
-              <button 
+
+            <div className="flex gap-4 mt-2">
+              <button
                 className="pixel-button pixel-button-blue"
-                onClick={() => useMoodBookStore.getState().setPhase('home')}
+                onClick={() => { roomSync.leave(); useMoodBookStore.getState().setPhase('home'); }}
               >
                 ← Back
               </button>
-              <button 
+              <button
                 className="pixel-button pixel-button-yellow"
                 onClick={() => useMoodBookStore.getState().setPhase('mood')}
               >
