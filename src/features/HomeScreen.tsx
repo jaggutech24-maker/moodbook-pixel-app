@@ -57,7 +57,8 @@ export const HomeScreen: React.FC = () => {
     try {
       await roomSync.joinRoom(joinCode.toUpperCase(), playerId, nameInput.trim(), false);
       setConnectState('idle');
-      setPhase('lobby');
+      // JOINER: Goes straight to guess phase (waiting for drawing)
+      setPhase('guess');
     } catch (err: any) {
       setConnectState('error');
       setConnectError('Could not find that room. Check the code and try again!');

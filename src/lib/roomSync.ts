@@ -83,13 +83,10 @@ class RoomSyncManager {
       const data = snapshot.val() as SyncEvent & {
         _senderId?: string;
         timestamp?: number;
-        _key?: string;
       };
       if (!data) return;
       // Ignore our own emits
       if (data._senderId === this.playerId) return;
-      // Ignore events from before we joined this session
-      if (data.timestamp && data.timestamp < joinTime - 5000) return;
 
       const { _senderId, timestamp, ...event } = data as any;
       this.listeners.forEach((fn) => fn(event as SyncEvent));

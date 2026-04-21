@@ -24,20 +24,21 @@ export default function App() {
 
       switch (event.type) {
         case 'PING':
-          // Joiner just connected — host advances both sides
-          if (store.phase === 'lobby') {
+          // Host receives this from Joiner
+          if (store.phase === 'lobby' || store.phase === 'home') {
             store.setPartnerName(event.playerName);
-            // Tell joiner our name so they can advance too
+            // Tell joiner we are ready!
             roomSync.emit({ type: 'PARTNER_JOINED', playerName: store.playerName });
-            // Host advances
-            store.setPhase(store.isDrawer ? 'mood' : 'guess');
+            // Host advances to select mood
+            store.setPhase('mood');
           }
           break;
         case 'PARTNER_JOINED':
-          // Joiner receives this from host and advances
-          if (store.phase === 'lobby') {
-            store.setPartnerName(event.playerName);
-            store.setPhase(store.isDrawer ? 'mood' : 'guess');
+          // Joiner receives this from Host
+          store.setPartnerName(event.playerName);
+          // If joiner was somehow stuck in lobby/home, move them to guess
+          if (store.phase === 'lobby' || store.phase === 'home') {
+            store.setPhase('guess');
           }
           break;
         case 'MOOD_SELECTED':
