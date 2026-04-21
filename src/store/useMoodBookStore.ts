@@ -79,6 +79,8 @@ interface MoodBookState {
   setPlayerName: (name: string) => void;
   isDrawer: boolean;
   setIsDrawer: (val: boolean) => void;
+  isHost: boolean;
+  setIsHost: (val: boolean) => void;
 
   // Room
   roomCode: string;
@@ -167,6 +169,8 @@ export const useMoodBookStore = create<MoodBookState>((set) => ({
   setPlayerName: (name) => set({ playerName: name }),
   isDrawer: true,
   setIsDrawer: (val) => set({ isDrawer: val }),
+  isHost: false,
+  setIsHost: (val) => set({ isHost: val }),
 
   // Room
   roomCode: '',

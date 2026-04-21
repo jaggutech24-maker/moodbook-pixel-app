@@ -13,7 +13,7 @@ import { PixelButton } from '../components/PixelButton';
 type ConnectState = 'idle' | 'connecting' | 'error';
 
 export const HomeScreen: React.FC = () => {
-  const { playerName, setPlayerName, setRoomCode, setPhase, playerId, setIsDrawer } = useMoodBookStore();
+  const { playerName, setPlayerName, setRoomCode, setPhase, playerId, setIsDrawer, setIsHost } = useMoodBookStore();
   const [mode, setMode] = useState<'none' | 'create' | 'join'>('none');
   const [joinCode, setJoinCode] = useState('');
   const [nameInput, setNameInput] = useState(playerName || '');
@@ -29,6 +29,7 @@ export const HomeScreen: React.FC = () => {
     setPlayerName(nameInput.trim());
     setRoomCode(code);
     setIsDrawer(true);
+    setIsHost(true);
     setConnectState('connecting');
     setConnectError('');
 
@@ -51,6 +52,7 @@ export const HomeScreen: React.FC = () => {
     setPlayerName(nameInput.trim());
     setRoomCode(joinCode.toUpperCase());
     setIsDrawer(false);
+    setIsHost(false);
     setConnectState('connecting');
     setConnectError('');
 
@@ -73,6 +75,7 @@ export const HomeScreen: React.FC = () => {
     setPlayerName(nameInput.trim());
     setRoomCode('SOLO');
     setIsDrawer(true);
+    setIsHost(true);
     setPhase('mood');
   };
 
