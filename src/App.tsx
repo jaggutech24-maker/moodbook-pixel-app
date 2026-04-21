@@ -24,43 +24,53 @@ export default function App() {
 
       switch (event.type) {
         case 'PING':
-          // Host receives this from Joiner
-          if (store.phase === 'lobby' || store.phase === 'home') {
+          // Host receives this from Joiner.
+          // Guard: only process if we are the host (isHost flag) and currently waiting in lobby.
+          // The host is always the drawer (mood → draw), joiner is always the guesser.
+          if (store.isHost && (store.phase === 'lobby' || store.phase === 'home')) {
             store.setPartnerName(event.playerName);
-            // Tell joiner we are ready!
+            // Acknowledge back to the joiner
             roomSync.emit({ type: 'PARTNER_JOINED', playerName: store.playerName });
-            // Advance: Host (isDrawer) goes to mood, Joiner (if any) goes to guess
-            store.setPhase(store.isDrawer ? 'mood' : 'guess');
+            // Host always goes to mood selection first (they draw)
+            store.setPhase('mood');
           }
           break;
+
         case 'PARTNER_JOINED':
-          // Joiner receives this from Host
-          store.setPartnerName(event.playerName);
-          if (store.phase === 'lobby' || store.phase === 'home' || store.phase === 'guess') {
-            // Advance based on role
-            store.setPhase(store.isDrawer ? 'mood' : 'guess');
-          }
-          break;
-        case 'MOOD_SELECTED':
-          store.setPartnerMood(event.mood);
-          break;
-        case 'DRAWING_SUBMITTED':
-          store.setPartnerDrawingDataUrl(event.dataUrl);
-          store.setPartnerStrokes(event.strokes);
-          // Advance guesser from their waiting state to guess
-          if (store.phase === 'guess' || store.phase === 'lobby') {
+          // Joiner receives this from Host.
+          // Guard: only process if we are NOT the host (i.e. we are the joiner).
+          if (!store.isHost && (store.phase === 'lobby' || store.phase === 'home')) {
+            store.setPartnerName(event.playerName);
+            // Joiner always waits to guess — go to guess/waiting screen
             store.setPhase('guess');
           }
           break;
+
+        case 'MOOD_SELECTED':
+          store.setPartnerMood(event.mood);
+          break;
+
+        case 'DRAWING_SUBMITTED':
+          store.setPartnerDrawingDataUrl(event.dataUrl);
+          store.setPartnerStrokes(event.strokes);
+          // When drawing arrives, move the guesser from waiting → active guess
+          if (!store.isHost && (store.phase === 'guess' || store.phase === 'lobby')) {
+            store.setPhase('guess');
+          }
+          break;
+
         case 'GUESS_SUBMITTED':
           store.setPartnerGuess(event.guess);
-          if (store.phase === 'waiting') {
+          // Host was waiting for guess; now show result
+          if (store.isHost && store.phase === 'waiting') {
             store.setPhase('result');
           }
           break;
+
         case 'PHASE_CHANGED':
           store.setPhase(event.phase as any);
           break;
+
         case 'ROUND_RESET':
           store.resetRound();
           break;
@@ -183,7 +193,7 @@ export default function App() {
   return (
     <div
       className="flex min-h-screen items-center justify-center p-4 sm:p-8"
-      style={{ backgroundColor: '#2C221F' }} // Dark wood/desk background
+      style={{ backgroundColor: '#2C221F' }}
     >
       <div
         className="w-full max-w-4xl mx-auto flex relative"
