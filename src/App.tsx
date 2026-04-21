@@ -29,16 +29,16 @@ export default function App() {
             store.setPartnerName(event.playerName);
             // Tell joiner we are ready!
             roomSync.emit({ type: 'PARTNER_JOINED', playerName: store.playerName });
-            // Host advances to select mood
-            store.setPhase('mood');
+            // Advance: Host (isDrawer) goes to mood, Joiner (if any) goes to guess
+            store.setPhase(store.isDrawer ? 'mood' : 'guess');
           }
           break;
         case 'PARTNER_JOINED':
           // Joiner receives this from Host
           store.setPartnerName(event.playerName);
-          // If joiner was somehow stuck in lobby/home, move them to guess
-          if (store.phase === 'lobby' || store.phase === 'home') {
-            store.setPhase('guess');
+          if (store.phase === 'lobby' || store.phase === 'home' || store.phase === 'guess') {
+            // Advance based on role
+            store.setPhase(store.isDrawer ? 'mood' : 'guess');
           }
           break;
         case 'MOOD_SELECTED':
